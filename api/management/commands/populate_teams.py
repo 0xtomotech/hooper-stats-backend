@@ -11,19 +11,6 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         supabase = get_supabase_client()
 
-        # Check and clear existing data
-        existing_teams = supabase.table('teams').select('id').execute()
-        if existing_teams.data:
-            # Generate a random UUID that won't match any existing id
-            non_existent_uuid = str(uuid.uuid4())
-            delete_result = supabase.table('teams').delete().neq(
-                'id', non_existent_uuid).execute()
-            self.stdout.write(self.style.SUCCESS(
-                f"Deleted {len(delete_result.data)} existing team records."))
-        else:
-            self.stdout.write(self.style.SUCCESS(
-                "The teams table was already empty."))
-
         # Fetch schedule data from Sportradar
         schedule_data = get_sportradar_data('games/2023/REG/schedule.json')
 
@@ -55,21 +42,50 @@ class Command(BaseCommand):
         # Convert DataFrame to list of dictionaries
         teams_data = teams_df.to_dict('records')
 
-        # Insert data into Supabase
-        result = supabase.table('teams').insert(teams_data).execute()
+        # Get existing teams
+        existing_teams = supabase.table('teams').select('*').execute()
+        existing_team_ids = {team['id'] for team in existing_teams.data}
 
-        # Check the result
-        if result.data:
+        # Identify teams to insert, update, or delete
+        teams_to_insert = [
+            team for team in teams_data if team['id'] not in existing_team_ids]
+        teams_to_update = [
+            team for team in teams_data if team['id'] in existing_team_ids]
+        teams_to_delete = existing_team_ids - \
+            {team['id'] for team in teams_data}
+
+        # Insert new teams
+        if teams_to_insert:
+            insert_result = supabase.table(
+                'teams').insert(teams_to_insert).execute()
             self.stdout.write(self.style.SUCCESS(
-                f"Successfully inserted {len(result.data)} teams."))
-        else:
-            self.stdout.write(self.style.ERROR("Failed to insert teams."))
-            self.stdout.write(self.style.ERROR(f"Error: {result.error}"))
+                f"Inserted {len(insert_result.data)} new teams."))
 
-        # Verify the insertion
-        fetched_teams = supabase.table('teams').select('*').execute()
+        # Update existing teams
+        for team in teams_to_update:
+            update_result = supabase.table('teams').update(
+                {'name': team['name']}).eq('id', team['id']).execute()
         self.stdout.write(self.style.SUCCESS(
-            f"Total teams in Supabase after insertion: {len(fetched_teams.data)}"))
+            f"Updated {len(teams_to_update)} existing teams."))
+
+        # Delete teams not in the new data (careful with this operation)
+        if teams_to_delete:
+            self.stdout.write(self.style.WARNING(
+                f"Found {len(teams_to_delete)} teams to delete. This operation may fail if there are related players."))
+            for team_id in teams_to_delete:
+                try:
+                    delete_result = supabase.table(
+                        'teams').delete().eq('id', team_id).execute()
+                    self.stdout.write(self.style.SUCCESS(
+                        f"Deleted team with ID: {team_id}"))
+                except Exception as e:
+                    self.stdout.write(self.style.ERROR(
+                        f"Failed to delete team with ID: {team_id}. Error: {str(e)}"))
+
+        # Verify the final state
+        final_teams = supabase.table('teams').select('*').execute()
+        self.stdout.write(self.style.SUCCESS(
+            f"Final count of teams in database: {len(final_teams.data)}"))
 
         self.stdout.write(self.style.SUCCESS(
             'Finished populating teams table'))
