@@ -112,4 +112,4 @@ Contributions to this project are welcome. Please fork the repository and submit
 
 ## 📄 License
 
-[Specify the license under which this project is released]
+This project is licensed under the [MIT License](https://opensource.org/licenses/MIT).
